@@ -1,0 +1,14 @@
+{
+  "port": 6700,
+  "cron": ["0 4 * * *", "0 21 * * *"],
+  "downloadDir": "./downloads",
+  "runOnStart": false,
+  "proxy": "",
+  "platforms": "all",
+  "platformFilter": {
+    "macOS": true,
+    "windows": true,
+    "linux": true
+  },
+  "specificPlatforms": []
+}

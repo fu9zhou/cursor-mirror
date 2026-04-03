@@ -1,0 +1,16 @@
+{
+  "name": "cursor-mirror",
+  "version": "1.0.0",
+  "description": "Cursor IDE 安装包内网镜像下载站",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
+    "https-proxy-agent": "^5.0.1",
+    "node-cron": "^4.2.1"
+  }
+}

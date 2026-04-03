@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cursor 内网镜像</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="wrapper">
+    <header>
+      <div class="logo"><h1>Cursor <span>Mirror</span></h1></div>
+      <p class="subtitle">内网镜像下载站 &mdash; 自动同步最新安装包</p>
+
+      <div class="version-panel">
+        <div class="version-card official">
+          <span class="label">官方最新版本</span>
+          <span class="ver" id="officialVer">-</span>
+        </div>
+        <div class="version-card mirror">
+          <span class="label">镜像版本</span>
+          <span class="ver" id="mirrorVer">-</span>
+        </div>
+      </div>
+
+      <div class="status-row" id="statusRow"></div>
+
+      <div class="log-panel" id="logPanel" style="display:none">
+        <div class="log-header" onclick="toggleLog()">
+          <span>同步日志</span><span class="toggle">&#x25BC;</span>
+        </div>
+        <div class="log-body" id="logBody"></div>
+      </div>
+    </header>
+
+    <div id="mainContent"></div>
+
+    <footer>
+      <table class="schedule-table">
+        <thead>
+          <tr><th>计划类型</th><th>计划时间</th><th>上次执行</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="sched-label">版本检查</td>
+            <td id="checkScheduleVal">每个整点</td>
+            <td id="checkLastVal">-</td>
+          </tr>
+          <tr>
+            <td class="sched-label">自动拉取</td>
+            <td id="syncScheduleVal">-</td>
+            <td id="syncLastVal">-</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>源站: <a href="https://cursor.com/cn/download" target="_blank">cursor.com/cn/download</a></p>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
