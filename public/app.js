@@ -125,6 +125,107 @@
     };
   }
 
+  // --- Platform detection (same algorithm as cursor.com) ---
+
+  function detectPlatform() {
+    var ua = window.navigator.userAgent.toLowerCase();
+    var platform = (navigator.platform || '').toLowerCase();
+    var combined = ua + ' ' + platform;
+    if (ua.indexOf('mac') !== -1) return 'darwin';
+    if (ua.indexOf('windows') !== -1) return 'win32';
+    if (ua.indexOf('linux') !== -1) {
+      var rpmDistros = [/centos/i, /redhat/i, /rhel/i, /fedora/i, /scientific/i, /rocky/i, /alma/i, /opensuse/i, /suse/i, /mageia/i, /mandriva/i, /mandrake/i];
+      for (var i = 0; i < rpmDistros.length; i++) { if (rpmDistros[i].test(combined)) return 'linux-rpm'; }
+      var debDistros = [/ubuntu/i, /debian/i, /mint/i, /elementary/i, /pop!_os/i, /zorin/i, /kali/i, /parrot/i];
+      for (var i = 0; i < debDistros.length; i++) { if (debDistros[i].test(combined)) return 'linux-deb'; }
+      return 'linux';
+    }
+    return null;
+  }
+
+  function detectArchitecture(callback) {
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+      navigator.userAgentData.getHighEntropyValues(['architecture', 'bitness', 'platform'])
+        .then(function (v) {
+          if (v.architecture === 'arm') callback('arm64');
+          else callback('x64');
+        })
+        .catch(function () { callback(detectArchFallback()); });
+    } else {
+      callback(detectArchFallback());
+    }
+  }
+
+  function detectArchFallback() {
+    var combined = navigator.userAgent + ' ' + (navigator.platform || '');
+    var armPatterns = [/arm64/i, /aarch64/i, /armv8l/i, /armv8a/i, /armv8/i, /armv9/i];
+    for (var i = 0; i < armPatterns.length; i++) { if (armPatterns[i].test(combined)) return 'arm64'; }
+    return 'x64';
+  }
+
+  function findBestDownloadOption(files, arch, platform) {
+    if (!files || !files.length) return null;
+    var includes = function (label, keywords) {
+      var lower = label.toLowerCase();
+      for (var i = 0; i < keywords.length; i++) { if (lower.indexOf(keywords[i]) !== -1) return true; }
+      return false;
+    };
+
+    var candidates = files.filter(function (f) { return f.success !== false; });
+
+    if (platform === 'darwin') {
+      if (arch === 'arm64') {
+        var found = candidates.find(function (f) { return includes(f.label, ['arm64', 'aarch64', 'apple silicon', 'arm']); });
+        if (found) return found;
+      }
+      var universal = candidates.find(function (f) { return includes(f.label, ['universal']); });
+      if (universal) return universal;
+      if (arch === 'x64') {
+        var found = candidates.find(function (f) { return includes(f.label, ['x64', 'intel']); });
+        if (found) return found;
+      }
+    }
+
+    if (platform === 'win32') {
+      var found = candidates.find(function (f) {
+        var lower = f.label.toLowerCase();
+        var isUser = lower.indexOf('user') !== -1;
+        var matchArch = arch === 'arm64'
+          ? (lower.indexOf('arm64') !== -1 || lower.indexOf('arm') !== -1)
+          : lower.indexOf('x64') !== -1;
+        return isUser && matchArch;
+      });
+      if (found) return found;
+    }
+
+    if (platform === 'linux-rpm') {
+      var found = candidates.find(function (f) {
+        var lower = f.label.toLowerCase();
+        return lower.indexOf('.rpm') !== -1 || lower.indexOf('rpm') !== -1;
+      });
+      if (found) return found;
+    } else if (platform === 'linux-deb' || platform === 'linux') {
+      var found = candidates.find(function (f) {
+        var lower = f.label.toLowerCase();
+        return lower.indexOf('.deb') !== -1 || lower.indexOf('deb') !== -1;
+      });
+      if (found) return found;
+    }
+
+    var archMatch = candidates.find(function (f) {
+      return includes(f.label, [arch, arch === 'arm64' ? 'arm' : 'x64']);
+    });
+    if (archMatch) return archMatch;
+    return candidates[0] || null;
+  }
+
+  function getOSName(platform) {
+    if (!platform) return null;
+    if (platform === 'darwin') return 'macOS';
+    if (platform === 'win32') return 'Windows';
+    return 'Linux';
+  }
+
   // --- Page rendering ---
 
   function renderStatusRow(data) {
@@ -214,6 +315,29 @@
   }
   window.toggleHistory = toggleHistory;
 
+  function renderHeroDownload(data) {
+    var el = document.getElementById('heroDownload');
+    if (!el || !data.version || !data.files || !data.files.length) {
+      if (el) el.innerHTML = '';
+      return;
+    }
+    var platform = detectPlatform();
+    var osName = getOSName(platform);
+    if (!osName) { el.innerHTML = ''; return; }
+
+    detectArchitecture(function (arch) {
+      var best = findBestDownloadOption(data.files, arch, platform);
+      if (!best || !best.filename) { el.innerHTML = ''; return; }
+      var href = '/download/' + data.version + '/' + escapeHtml(best.filename);
+      el.innerHTML = '<div class="hero-download">'
+        + '<a class="hero-download-btn" href="' + href + '" title="下载 ' + escapeHtml(best.label) + '">'
+        + '<span class="dl-arrow">⤓</span> Download for ' + escapeHtml(osName)
+        + '</a>'
+        + '<p class="hero-download-hint">' + escapeHtml(best.label) + ' · ' + formatSize(best.size) + '</p>'
+        + '</div>';
+    });
+  }
+
   function renderMainContent(data) {
     var el = document.getElementById('mainContent');
     if (!data.version || !data.files || !data.files.length) {
@@ -229,6 +353,7 @@
     document.getElementById('mirrorVer').textContent = data.version ? 'v' + data.version : '未同步';
 
     renderStatusRow(data);
+    renderHeroDownload(data);
     renderMainContent(data);
 
     var checkLast = data.lastCheckTime
