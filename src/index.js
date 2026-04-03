@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const { initProxy } = require('./proxy');
 const { createServer, refreshOfficialVersion, setOfficialVersion, setLastSyncTime, setSyncTrigger } = require('./server');
-const { syncCursorPackages, abortSync, getSyncState } = require('./downloader');
+const { syncCursorPackages, abortSync, getSyncState, migrateExistingToWPS365 } = require('./downloader');
 
 const config = require(path.resolve(__dirname, '../config.json'));
 
@@ -78,6 +78,13 @@ server = app.listen(port, '0.0.0.0', () => {
   console.log(`  Local:   http://localhost:${port}`);
   if (ip) console.log(`  Network: http://${ip}:${port}`);
 });
+
+if (config.wps365?.enabled && config.wps365?.driveId) {
+  console.log('[Init] WPS365 云端同步已启用，检查历史版本迁移...');
+  migrateExistingToWPS365(config).catch(err => {
+    console.error('[Init] Migration error:', err.message);
+  });
+}
 
 if (config.runOnStart) {
   console.log('[Init] runOnStart=true, executing initial sync...');

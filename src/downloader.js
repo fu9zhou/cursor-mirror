@@ -7,6 +7,7 @@ const { PassThrough } = require('stream');
 const { EventEmitter } = require('events');
 const { fetchLatestVersion, getDownloadList } = require('./scraper');
 const { getProxyAgent } = require('./proxy');
+const { isCliAvailable, ensureFolder, uploadFile, updateInfoFile, setLogger } = require('./uploader');
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000;
@@ -22,6 +23,8 @@ function emitLog(msg) {
   console.log(msg);
   syncEmitter.emit('log', entry);
 }
+
+setLogger(emitLog);
 
 function getSyncState() { return syncState; }
 
@@ -237,6 +240,28 @@ async function downloadFile(url, destPath, retries = MAX_RETRIES) {
   return { size: 0, expectedSize: 0, success: false, error: 'All retries exhausted' };
 }
 
+async function initWPS365(config, fullVersion) {
+  const wps = config.wps365;
+  if (!wps || !wps.enabled || !wps.driveId) return null;
+
+  if (!isCliAvailable()) {
+    emitLog('[WPS365] wps365-cli 未安装或不可用，本次仅本地存储');
+    return null;
+  }
+
+  try {
+    const rootName = wps.rootFolderName || 'cursor-mirror';
+    const parentId = wps.parentFolderId || '0';
+    emitLog(`[WPS365] 初始化云端存储: ${rootName}/${fullVersion}`);
+    const rootFolderId = await ensureFolder(wps.driveId, parentId, rootName);
+    const versionFolderId = await ensureFolder(wps.driveId, rootFolderId, fullVersion);
+    return { driveId: wps.driveId, versionFolderId, rootFolderId };
+  } catch (err) {
+    emitLog(`[WPS365] 初始化失败: ${err.message}，本次仅本地存储`);
+    return null;
+  }
+}
+
 async function syncCursorPackages(config, options = {}) {
   if (syncState.running) {
     emitLog('[Sync] 同步任务正在进行中，跳过重复触发');
@@ -288,7 +313,11 @@ async function syncCursorPackages(config, options = {}) {
         }
       }
 
-      if (!force && invalidCount === 0 && storedFiles.length >= downloadList.length) {
+      const allHaveCloudUrl = storedFiles.every(f => f.downloadUrl);
+      const wpsEnabled = config.wps365?.enabled && config.wps365?.driveId;
+
+      if (!force && invalidCount === 0 && storedFiles.length >= downloadList.length
+          && (!wpsEnabled || allHaveCloudUrl)) {
         emitLog('[Sync] 已是最新版本，全部安装包校验通过，无需下载');
         syncEmitter.emit('done', { skipped: true, version: fullVersion });
         return { skipped: true, version: fullVersion };
@@ -298,6 +327,8 @@ async function syncCursorPackages(config, options = {}) {
         emitLog(`[Sync] 发现 ${invalidCount} 个文件需要重新下载`);
       } else if (storedFiles.length < downloadList.length) {
         emitLog(`[Sync] 本地仅 ${storedFiles.length}/${downloadList.length} 个文件，继续补全`);
+      } else if (wpsEnabled && !allHaveCloudUrl) {
+        emitLog(`[Sync] 部分文件尚未上传到云端，继续补全`);
       } else if (force) {
         emitLog('[Sync] 手动触发强制同步，重新检查所有安装包');
       }
@@ -315,8 +346,14 @@ async function syncCursorPackages(config, options = {}) {
 
     cleanupTempFiles(versionDir);
 
+    const wps365 = await initWPS365(config, fullVersion);
+    if (wps365) {
+      emitLog(`[Sync] WPS365 云端上传已启用，拉一个传一个`);
+    }
+
     emitLog(`[Sync] 开始下载 ${downloadList.length} 个安装包...`);
 
+    const existingEntry = store.history.find(h => h.version === fullVersion);
     const results = [];
 
     for (let i = 0; i < downloadList.length; i++) {
@@ -326,7 +363,7 @@ async function syncCursorPackages(config, options = {}) {
       }
 
       const item = downloadList[i];
-      emitLog(`[${i + 1}/${downloadList.length}] 下载: ${item.label} (${item.key})`);
+      emitLog(`[${i + 1}/${downloadList.length}] 处理: ${item.label} (${item.key})`);
 
       const headRes = await httpHead(item.url).catch(() => null);
 
@@ -337,6 +374,10 @@ async function syncCursorPackages(config, options = {}) {
       const filename = resolveFilename(item.key, contentType, contentDisposition, finalUrl);
       const destPath = path.join(versionDir, filename);
 
+      const existingFile = existingEntry?.files?.find(f => f.filename === filename);
+      let downloadNeeded = true;
+      let downloadResult = null;
+
       if (fs.existsSync(destPath)) {
         const stats = fs.statSync(destPath);
         if (stats.size > 0) {
@@ -345,31 +386,55 @@ async function syncCursorPackages(config, options = {}) {
             try { fs.unlinkSync(destPath); } catch {}
           } else {
             const verified = headExpectedSize > 0 && stats.size === headExpectedSize;
-            emitLog(`  已存在: ${filename} (${formatSize(stats.size)})${verified ? ' ✓' : ''}, 跳过`);
-            results.push({
-              ...item, filename, size: stats.size, expectedSize: headExpectedSize,
-              success: true, verified, cached: true,
-            });
-            continue;
+            emitLog(`  已存在: ${filename} (${formatSize(stats.size)})${verified ? ' ✓' : ''}`);
+            downloadNeeded = false;
+            downloadResult = { size: stats.size, expectedSize: headExpectedSize, success: true };
           }
         }
       }
 
-      const result = await downloadFile(item.url, destPath);
-      if (result.success) {
-        const verified = result.expectedSize > 0 && result.size === result.expectedSize;
-        emitLog(`  完成: ${filename} (${formatSize(result.size)})${verified ? ' ✓ 校验通过' : ''}`);
-        results.push({
-          ...item, filename, size: result.size, expectedSize: result.expectedSize,
-          success: true, verified, cached: false,
-        });
-      } else {
-        emitLog(`  失败: ${filename} - ${result.error}`);
-        results.push({
-          ...item, filename, size: 0, expectedSize: 0,
-          success: false, verified: false, cached: false,
-        });
+      if (downloadNeeded) {
+        downloadResult = await downloadFile(item.url, destPath);
+        if (downloadResult.success) {
+          const verified = downloadResult.expectedSize > 0 && downloadResult.size === downloadResult.expectedSize;
+          emitLog(`  下载完成: ${filename} (${formatSize(downloadResult.size)})${verified ? ' ✓' : ''}`);
+        } else {
+          emitLog(`  下载失败: ${filename} - ${downloadResult.error}`);
+          results.push({
+            ...item, filename, size: 0, expectedSize: 0,
+            success: false, verified: false, cached: false,
+          });
+          continue;
+        }
       }
+
+      let downloadUrl = existingFile?.downloadUrl || '';
+      let wps365FileId = existingFile?.wps365FileId || '';
+
+      if (wps365 && downloadResult.success) {
+        if (downloadUrl && !downloadNeeded) {
+          emitLog(`  云端已上传，跳过: ${filename}`);
+        } else {
+          try {
+            const uploadResult = await uploadFile(destPath, wps365.driveId, wps365.versionFolderId);
+            downloadUrl = uploadResult.downloadUrl;
+            wps365FileId = uploadResult.fileId;
+            emitLog(`  上传完成: ${filename}`);
+          } catch (err) {
+            emitLog(`  ⚠ 云端上传失败 (本地文件可用): ${filename} - ${err.message}`);
+          }
+        }
+      }
+
+      const verified = downloadResult.expectedSize > 0
+        && downloadResult.size === downloadResult.expectedSize;
+
+      results.push({
+        ...item, filename, size: downloadResult.size,
+        expectedSize: downloadResult.expectedSize,
+        success: true, verified, cached: !downloadNeeded,
+        downloadUrl, wps365FileId,
+      });
     }
 
     const successResults = results.filter((r) => r.success);
@@ -380,16 +445,18 @@ async function syncCursorPackages(config, options = {}) {
       key: r.key, label: r.label, category: r.category,
       filename: r.filename, size: r.size, expectedSize: r.expectedSize,
       success: true, verified: r.verified,
+      downloadUrl: r.downloadUrl || '',
+      wps365FileId: r.wps365FileId || '',
     }));
 
     if (syncState.aborted) {
-      emitLog(`[Sync] 已终止: ${successCount} 个安装包已下载，${downloadList.length - results.length} 个已跳过`);
+      emitLog(`[Sync] 已终止: ${successCount} 个安装包已处理，${downloadList.length - results.length} 个已跳过`);
       emitLog('[Sync] 当前显示版本保持不变');
       syncEmitter.emit('aborted');
       return { skipped: false, version: fullVersion, results, aborted: true };
     }
 
-    emitLog(`[Sync] 完成: ${successCount}/${downloadList.length} 个安装包已下载`);
+    emitLog(`[Sync] 完成: ${successCount}/${downloadList.length} 个安装包已处理`);
 
     if (allSucceeded) {
       const newEntry = {
@@ -404,15 +471,26 @@ async function syncCursorPackages(config, options = {}) {
         emitLog(`[Sync] 版本已切换: ${localVersion} → ${fullVersion}`);
       }
     } else if (!isNewVersion && successCount > 0) {
-      const existingEntry = store.history.find(h => h.version === fullVersion);
-      if (existingEntry) {
-        existingEntry.files = fileEntries;
-        existingEntry.updatedAt = new Date().toISOString();
+      const entry = store.history.find(h => h.version === fullVersion);
+      if (entry) {
+        for (const fe of fileEntries) {
+          const idx = entry.files.findIndex(f => f.filename === fe.filename);
+          if (idx >= 0) entry.files[idx] = fe;
+          else entry.files.push(fe);
+        }
+        entry.updatedAt = new Date().toISOString();
       }
       writeVersionStore(downloadDir, store);
       emitLog(`[Sync] 已补全部分文件，但仍有 ${downloadList.length - successCount} 个未成功`);
     } else if (isNewVersion) {
-      emitLog(`[Sync] 新版本 ${fullVersion} 未全部下载成功 (${successCount}/${downloadList.length})，保持当前版本 ${localVersion}`);
+      emitLog(`[Sync] 新版本 ${fullVersion} 未全部完成 (${successCount}/${downloadList.length})，保持当前版本 ${localVersion}`);
+    }
+
+    if (wps365 && successCount > 0) {
+      await refreshCloudInfoFile(config, {
+        lastSyncTime: new Date().toISOString(),
+        officialVersion: fullVersion,
+      });
     }
 
     const finalResult = { skipped: false, version: fullVersion, results };
@@ -421,6 +499,146 @@ async function syncCursorPackages(config, options = {}) {
   } finally {
     syncState.running = false;
     syncState.activeReq = null;
+  }
+}
+
+async function migrateExistingToWPS365(config) {
+  const wps = config.wps365;
+  if (!wps || !wps.enabled || !wps.driveId) {
+    emitLog('[WPS365] 云端上传未启用，跳过迁移');
+    return;
+  }
+
+  if (!isCliAvailable()) {
+    emitLog('[WPS365] wps365-cli 未安装，跳过迁移');
+    return;
+  }
+
+  const downloadDir = path.resolve(config.downloadDir || './downloads');
+  const store = readVersionStore(downloadDir);
+
+  if (!store.history.length) {
+    emitLog('[WPS365] 没有历史版本需要迁移');
+    return;
+  }
+
+  const needsMigration = store.history.some(v =>
+    v.files.some(f => f.success !== false && !f.downloadUrl)
+  );
+  if (!needsMigration) {
+    emitLog('[WPS365] 所有版本已同步到云端，无需迁移');
+    return;
+  }
+
+  if (syncState.running) {
+    emitLog('[WPS365] 同步任务正在进行中，跳过迁移');
+    return;
+  }
+
+  syncState.running = true;
+  syncState.aborted = false;
+
+  try {
+    const rootName = wps.rootFolderName || 'cursor-mirror';
+    const parentId = wps.parentFolderId || '0';
+    const rootFolderId = await ensureFolder(wps.driveId, parentId, rootName);
+
+    let changed = false;
+
+    for (const versionEntry of store.history) {
+      const pending = versionEntry.files.filter(f => f.success !== false && !f.downloadUrl);
+      if (!pending.length) continue;
+
+      emitLog(`[WPS365] 迁移版本 ${versionEntry.version} (${pending.length} 个文件)...`);
+      const versionFolderId = await ensureFolder(wps.driveId, rootFolderId, versionEntry.version);
+
+      for (const file of pending) {
+        if (syncState.aborted) {
+          emitLog('[WPS365] 迁移已终止');
+          if (changed) writeVersionStore(downloadDir, store);
+          return;
+        }
+
+        const filePath = path.join(downloadDir, versionEntry.version, file.filename);
+        if (!fs.existsSync(filePath)) {
+          emitLog(`  跳过 (本地不存在): ${file.filename}`);
+          continue;
+        }
+
+        try {
+          const result = await uploadFile(filePath, wps.driveId, versionFolderId);
+          file.downloadUrl = result.downloadUrl;
+          file.wps365FileId = result.fileId;
+          changed = true;
+          writeVersionStore(downloadDir, store);
+        } catch (err) {
+          emitLog(`  迁移失败: ${file.filename} - ${err.message}`);
+        }
+      }
+    }
+
+    if (changed) {
+      emitLog('[WPS365] 迁移完成，数据已保存');
+      await refreshCloudInfoFile(config, {
+        lastSyncTime: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    emitLog(`[WPS365] 迁移异常: ${err.message}`);
+  } finally {
+    syncState.running = false;
+  }
+}
+
+function getLocalIP() {
+  const interfaces = require('os').networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return 'localhost';
+}
+
+async function refreshCloudInfoFile(config, { lastSyncTime, lastCheckTime, officialVersion } = {}) {
+  const wps = config.wps365;
+  if (!wps?.enabled || !wps.driveId) return;
+
+  try {
+    const cliOk = await isCliAvailable();
+    if (!cliOk) return;
+
+    const downloadDir = path.resolve(config.downloadDir || './downloads');
+    const store = readVersionStore(downloadDir);
+    const rootFolderId = await ensureFolder(wps.driveId, wps.parentFolderId || '0', wps.rootFolderName || 'cursor-mirror');
+
+    const currentEntry = store.history.find(h => h.version === store.current);
+    const historyVersions = store.history
+      .filter(h => h.version !== store.current)
+      .map(h => 'v' + h.version);
+
+    const totalFiles = currentEntry?.files?.length || 0;
+    const port = config.port || 6700;
+    const siteUrl = config.siteUrl || `http://${getLocalIP()}:${port}`;
+
+    const infoData = {
+      mirrorVersion: store.current || '-',
+      officialVersion: officialVersion || store.current || '-',
+      fileCount: totalFiles,
+      historyVersions,
+      siteUrl,
+      lastSyncTime: lastSyncTime || store.lastSyncTime || null,
+      lastCheckTime: lastCheckTime || store.lastCheckTime || null,
+    };
+
+    if (lastSyncTime) store.lastSyncTime = lastSyncTime;
+    if (lastCheckTime) store.lastCheckTime = lastCheckTime;
+
+    const newInfoFileId = await updateInfoFile(wps.driveId, rootFolderId, infoData);
+    if (newInfoFileId) store.wps365InfoFileId = newInfoFileId;
+    writeVersionStore(downloadDir, store);
+  } catch (err) {
+    emitLog(`[WPS365] 更新信息文件失败: ${err.message}`);
   }
 }
 
@@ -433,6 +651,8 @@ function formatSize(bytes) {
 
 module.exports = {
   syncCursorPackages,
+  migrateExistingToWPS365,
+  refreshCloudInfoFile,
   readVersionStore,
   formatSize,
   syncEmitter,

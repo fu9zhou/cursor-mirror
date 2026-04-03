@@ -2,6 +2,22 @@
   var sse = null;
   var logOpen = false;
   var isLocal = false;
+  var isLocalDownloadMode = location.search.indexOf('local') !== -1;
+
+  function toggleDownloadMode() {
+    if (isLocalDownloadMode) {
+      var url = location.pathname;
+      var params = new URLSearchParams(location.search);
+      params.delete('local');
+      var qs = params.toString();
+      location.href = url + (qs ? '?' + qs : '');
+    } else {
+      var params = new URLSearchParams(location.search);
+      params.set('local', '1');
+      location.href = location.pathname + '?' + params.toString();
+    }
+  }
+  window.toggleDownloadMode = toggleDownloadMode;
 
   var CATEGORY_ICONS = { macOS: '🍎', windows: '🪟', linux: '🐧' };
   var CATEGORY_TITLES = { macOS: 'macOS', windows: 'Windows', linux: 'Linux' };
@@ -95,6 +111,22 @@
       .catch(function () {});
   }
   window.abortSync = abortSync;
+
+  function triggerMigrate() {
+    showLogPanel();
+    document.getElementById('logBody').innerHTML = '';
+    connectSSE();
+    addLogLine({ time: new Date().toISOString(), msg: '[WPS365] 开始迁移已有版本到云端...' });
+    fetch('/api/sync/migrate', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        addLogLine({ time: new Date().toISOString(), msg: d.msg || '迁移已触发' });
+      })
+      .catch(function (e) {
+        addLogLine({ time: new Date().toISOString(), msg: '迁移触发失败: ' + e.message });
+      });
+  }
+  window.triggerMigrate = triggerMigrate;
 
   // --- SSE ---
 
@@ -226,6 +258,15 @@
     return 'Linux';
   }
 
+  function getDownloadHref(file, version) {
+    if (!isLocalDownloadMode && file.downloadUrl) return file.downloadUrl;
+    return '/download/' + version + '/' + escapeHtml(file.filename);
+  }
+
+  function isExternalLink(file) {
+    return !isLocalDownloadMode && !!file.downloadUrl;
+  }
+
   // --- Page rendering ---
 
   function renderStatusRow(data) {
@@ -240,9 +281,16 @@
       html += '<div class="status-badge behind"><span class="dot"></span>尚未同步</div>';
     }
 
+    if (isLocalDownloadMode) {
+      html += '<div class="status-badge local-mode clickable" onclick="toggleDownloadMode()" title="点击切换到云端下载"><span class="dot"></span>📥 本地下载模式</div>';
+    } else {
+      html += '<div class="status-badge cloud-mode clickable" onclick="toggleDownloadMode()" title="点击切换到本地下载"><span class="dot"></span>☁ 云端下载模式</div>';
+    }
+
     if (isLocal) {
       html += '<button class="sync-btn" id="syncBtn" onclick="triggerSync()">↻ 立即拉取</button>';
       html += '<button class="sync-btn abort-btn" id="abortBtn" onclick="abortSync()" style="display:none;background:#dc2626">■ 终止</button>';
+      html += '<button class="sync-btn migrate-btn" id="migrateBtn" onclick="triggerMigrate()" title="上传已有版本到WPS365">☁ 迁移到云端</button>';
     }
 
     row.innerHTML = html;
@@ -255,10 +303,16 @@
       return '<div class="category"><h2>' + icon + ' ' + title + '</h2><p class="empty">暂无可用文件</p></div>';
     }
     var rows = items.filter(function (f) { return f.success !== false; }).map(function (f) {
-      var verifiedBadge = f.verified ? '<span class="verified-badge" title="完整性校验通过">✓</span>' : '';
-      return '<a class="file-row" href="/download/' + version + '/' + escapeHtml(f.filename) + '" title="下载 ' + escapeHtml(f.label) + '">'
+      var href = getDownloadHref(f, version);
+      var external = isExternalLink(f);
+      var targetAttr = external ? ' target="_blank" rel="noopener"' : '';
+      var showCloud = !isLocalDownloadMode && !!f.downloadUrl;
+      var badge = showCloud
+        ? '<span class="cloud-badge" title="云端存储">☁</span>'
+        : (f.verified ? '<span class="verified-badge" title="完整性校验通过">✓</span>' : '');
+      return '<a class="file-row" href="' + href + '"' + targetAttr + ' title="下载 ' + escapeHtml(f.label) + '">'
         + '<span class="file-label">' + escapeHtml(f.label) + '</span>'
-        + '<span class="file-meta">' + verifiedBadge + '<span class="file-size">' + formatSize(f.size) + '</span><span class="dl-icon">&#x2913;</span></span>'
+        + '<span class="file-meta">' + badge + '<span class="file-size">' + formatSize(f.size) + '</span><span class="dl-icon">&#x2913;</span></span>'
         + '</a>';
     }).join('');
     return '<div class="category"><h2>' + icon + ' ' + title + '</h2>' + rows + '</div>';
@@ -328,9 +382,11 @@
     detectArchitecture(function (arch) {
       var best = findBestDownloadOption(data.files, arch, platform);
       if (!best || !best.filename) { el.innerHTML = ''; return; }
-      var href = '/download/' + data.version + '/' + escapeHtml(best.filename);
+      var href = getDownloadHref(best, data.version);
+      var external = isExternalLink(best);
+      var targetAttr = external ? ' target="_blank" rel="noopener"' : '';
       el.innerHTML = '<div class="hero-download">'
-        + '<a class="hero-download-btn" href="' + href + '" title="下载 ' + escapeHtml(best.label) + '">'
+        + '<a class="hero-download-btn" href="' + href + '"' + targetAttr + ' title="下载 ' + escapeHtml(best.label) + '">'
         + '<span class="dl-arrow">⤓</span> Download for ' + escapeHtml(osName)
         + '</a>'
         + '<p class="hero-download-hint">' + escapeHtml(best.label) + ' · ' + formatSize(best.size) + '</p>'

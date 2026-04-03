@@ -127,6 +127,8 @@ h1 span { color: var(--accent); }
 .sync-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .abort-btn { background: #dc2626; }
 .abort-btn:hover { opacity: 0.9; }
+.migrate-btn { background: #2563eb; }
+.migrate-btn:hover { opacity: 0.9; }
 .sync-btn .spinner {
   width: 14px; height: 14px;
   border: 2px solid rgba(255,255,255,0.3);
@@ -252,6 +254,22 @@ h1 span { color: var(--accent); }
 .file-meta { display: flex; align-items: center; gap: 12px; }
 .file-size { font-family: monospace; font-size: 12px; color: var(--text-dim); }
 .verified-badge { color: var(--green); font-size: 13px; font-weight: 700; }
+.cloud-badge { color: #60a5fa; font-size: 14px; }
+
+.status-badge.local-mode {
+  background: rgba(96,165,250,0.12); border: 1px solid rgba(96,165,250,0.25); color: #60a5fa;
+}
+.status-badge.local-mode .dot { background: #60a5fa; }
+
+.status-badge.cloud-mode {
+  background: rgba(139,92,246,0.12); border: 1px solid rgba(139,92,246,0.25); color: #a78bfa;
+}
+.status-badge.cloud-mode .dot { background: #a78bfa; }
+
+.status-badge.clickable {
+  cursor: pointer; user-select: none; transition: opacity 0.15s, transform 0.15s;
+}
+.status-badge.clickable:hover { opacity: 0.85; transform: scale(1.03); }
 .dl-icon { font-size: 18px; color: var(--text-dim); transition: color 0.15s, transform 0.15s; }
 
 .empty { padding: 24px 20px; color: var(--text-dim); font-size: 13px; text-align: center; }

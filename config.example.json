@@ -1,6 +1,6 @@
 {
   "port": 6700,
-  "cron": ["0 4 * * *", "0 21 * * *"],
+  "cron": ["30 4 * * *", "30 21 * * *"],
   "downloadDir": "./downloads",
   "runOnStart": false,
   "proxy": "",
@@ -10,5 +10,11 @@
     "windows": true,
     "linux": true
   },
-  "specificPlatforms": []
+  "specificPlatforms": [],
+  "wps365": {
+    "enabled": false,
+    "driveId": "",
+    "parentFolderId": "0",
+    "rootFolderName": "cursor-mirror"
+  }
 }

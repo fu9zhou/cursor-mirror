@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **定时自动拉取** — 按 cron 配置定时拉取（默认 4:00 / 21:00），每个整点自动检查官方最新版本
+- **定时自动拉取** — 按 cron 配置定时拉取（默认 4:30 / 21:30），每个整点自动检查官方最新版本
 - **三级版本号** — 通过 302 重定向探测获取完整的三级版本号（如 2.6.22），而非官网页面上的二级版本
 - **完整性校验** — 下载完成后对比 Content-Length 校验文件大小，每次同步时自动检验已有文件完整性
 - **原子版本切换** — 新版本全部安装包下载成功后才切换版本号，下载期间旧版本正常可用
@@ -21,6 +21,11 @@
 - **代理支持** — 自动检测 Windows 系统代理 / VPN，也支持手动配置或环境变量
 - **稳定下载** — 临时文件下载 + 原子重命名，支持重定向跟随、失败重试（指数退避）
 - **优雅退出** — SIGTERM/SIGINT 时正确关闭 HTTP 服务器、终止下载、清理临时文件
+- **WPS365 云端同步**（可选） — 安装包拉取后自动上传到 WPS365 企业云盘，内网用户通过云盘链接下载，不依赖本地服务器带宽
+- **拉一个传一个** — WPS365 上传采用串行流水线，每个安装包下载完成后立即上传，失败不阻塞后续文件
+- **云端状态文件** — 在 WPS365 文件夹中自动维护一个状态信息文件，文件名动态展示镜像版本和更新时间
+- **下载模式切换** — 默认走云端链接，点击页面标识可一键切换到本地下载模式（也可通过 URL 加 `?local` 切换）
+- **智能兜底** — 云端上传失败的文件仍可通过本地服务器下载，前端自动回退
 
 ## 系统架构
 
@@ -35,15 +40,18 @@
 |            Cursor Mirror Server               |
 |                                               |
 |  scraper --> downloader --> disk              |
-|  (cheerio)   (https/重试)                      |
+|  (cheerio)   (https/重试)   |                 |
+|                             v                 |
+|  cron       uploader --> WPS365 云盘(可选)    |
+|  (定时器)   (拉一个传一个)                      |
 |                                               |
-|  cron         express ---------> :6700        |
-|  (定时器)     (Web + API)                      |
+|  express ---------> :6700                     |
+|  (Web + API)                                  |
 +----------------------------------------------+
-                         |
-            +------------+------------+
-            v            v            v
-        内网设备A    内网设备B    内网设备C
+               |                    |
+       +-------+-------+    WPS365 云盘链接
+       v       v       v           |
+   内网设备A 设备B   设备C  <------+
 ```
 
 ## 快速开始
@@ -94,7 +102,7 @@ npm start
 ```json
 {
   "port": 6700,
-  "cron": ["0 4 * * *", "0 21 * * *"],
+  "cron": ["30 4 * * *", "30 21 * * *"],
   "downloadDir": "./downloads",
   "runOnStart": false,
   "proxy": "",
@@ -104,7 +112,13 @@ npm start
     "windows": true,
     "linux": true
   },
-  "specificPlatforms": []
+  "specificPlatforms": [],
+  "wps365": {
+    "enabled": false,
+    "driveId": "",
+    "parentFolderId": "0",
+    "rootFolderName": "cursor-mirror"
+  }
 }
 ```
 
@@ -120,6 +134,10 @@ npm start
 | `platforms`         | string             | `"all"`                       | 平台选择模式：`"all"` 全部、`"filter"` 按类别、`"specific"` 指定平台                                  |
 | `platformFilter`    | object             | 全 true                       | 当 `platforms="filter"` 时，按 macOS/windows/linux 类别开关                                           |
 | `specificPlatforms` | string[]           | `[]`                          | 当 `platforms="specific"` 时，列出具体平台 key                                                        |
+| `wps365.enabled`    | boolean            | `false`                       | 是否启用 WPS365 云端同步                                                                              |
+| `wps365.driveId`    | string             | `""`                          | WPS365 盘 ID（通过 `wps365-cli drive list` 获取）                                                     |
+| `wps365.parentFolderId` | string         | `"0"`                         | 父文件夹 ID，`"0"` 表示根目录                                                                         |
+| `wps365.rootFolderName` | string         | `"cursor-mirror"`             | 在 WPS365 中创建的根文件夹名称                                                                        |
 
 ### 平台筛选示例
 
@@ -145,6 +163,35 @@ npm start
 }
 ```
 
+### WPS365 云端同步配置
+
+启用后，安装包下载完成后会自动上传到 WPS365 企业云盘，内网用户可通过云盘链接下载。
+
+**前置条件：**
+
+1. 安装 [WPS365 CLI](https://github.com/wps365-open/cli)
+2. 配置 OAuth 凭证并登录授权（参考 [docs/WPS365-CLI-上传指南.md](docs/WPS365-CLI-上传指南.md)）
+3. 获取盘 ID：`wps365-cli drive list --allotee-type user`
+
+**配置示例：**
+
+```json
+{
+  "wps365": {
+    "enabled": true,
+    "driveId": "你的盘ID",
+    "parentFolderId": "0",
+    "rootFolderName": "cursor-mirror"
+  }
+}
+```
+
+启用后：
+- 拉取时每个文件**下载完立即上传**到 WPS365 对应版本文件夹
+- 页面默认展示云端下载链接，点击标识可切换到本地下载模式
+- WPS365 文件夹中自动维护一个状态信息文件（`【镜像vX.X.X_官方vX.X.X_N个包_日期_时间更新】.txt`）
+- 上传失败的文件仍可通过本地服务器下载
+
 ### 支持的平台 key
 
 | key                | 说明                             |
@@ -166,14 +213,15 @@ npm start
 ## 工作流程
 
 1. **启动** — Express 服务器先启动并监听端口，页面立即可访问
-2. **初始同步** — 若 `runOnStart=true`，后台自动执行首次同步
-3. **整点检查** — 每小时整点自动抓取 `cursor.com/cn/download`，获取官方最新三级版本号并缓存
-4. **定时拉取** — 按 cron 配置（默认 4:00 / 21:00）触发完整拉取流程
+2. **初始同步** — 若 `runOnStart=true`，后台自动执行首次同步；若 WPS365 已启用，自动迁移已有版本到云端
+3. **整点检查** — 每小时整点自动抓取 `cursor.com/cn/download`，获取官方最新三级版本号并缓存，同步更新 WPS365 状态文件
+4. **定时拉取** — 按 cron 配置（默认 4:30 / 21:30）触发完整拉取流程
 5. **版本比对** — 与本地 `downloads/version.json` 记录的版本对比
 6. **完整性校验** — 即使版本号相同，也校验已有文件大小是否与预期一致
 7. **增量下载** — 仅在版本不同或文件不完整时下载缺失的安装包，使用 `.tmp` 临时文件 + 原子重命名
-8. **原子切换** — 全部安装包下载成功后才更新 `version.json` 中的当前版本
-9. **手动触发** — 本地访问时点击"立即拉取"可随时手动同步，与定时拉取使用同一套逻辑
+8. **云端上传** — 若启用 WPS365，每个文件下载完成后立即上传到云盘版本文件夹，上传失败不阻塞后续文件
+9. **原子切换** — 全部安装包下载成功后才更新 `version.json` 中的当前版本
+10. **手动触发** — 本地访问时点击"立即拉取"可随时手动同步，与定时拉取使用同一套逻辑
 
 ## API 接口
 
@@ -185,6 +233,7 @@ npm start
 | GET  | `/download/:version/:file` | 无       | 下载指定版本的安装包               |
 | POST | `/api/sync/trigger`        | 仅本机   | 触发手动同步                       |
 | POST | `/api/sync/abort`          | 仅本机   | 终止正在进行的同步                 |
+| POST | `/api/sync/migrate`        | 仅本机   | 将已有版本迁移上传到 WPS365        |
 | GET  | `/api/sync/stream`         | 仅本机   | SSE 实时日志流                     |
 
 ## 目录结构
@@ -198,7 +247,8 @@ cursor-mirror/
 ├── uninstall-service.bat # 一键卸载服务（双击运行）
 ├── service.bat          # 服务日常管理菜单（双击运行）
 ├── docs/
-│   └── windows-service.md  # Windows 服务部署指南 & NSSM 详解
+│   ├── windows-service.md     # Windows 服务部署指南 & NSSM 详解
+│   └── WPS365-CLI-上传指南.md  # WPS365 CLI 安装与上传指南
 ├── logs/                # 服务日志（自动创建）
 ├── public/              # 前端静态资源
 │   ├── index.html       # 页面骨架
@@ -208,6 +258,7 @@ cursor-mirror/
 │   ├── index.js         # 入口：cron 调度 + 服务器启动
 │   ├── scraper.js       # 官网抓取：版本号解析 + 下载链接生成
 │   ├── downloader.js    # 下载器：增量下载 + 重试 + 事件推送 + 终止支持
+│   ├── uploader.js      # WPS365 上传：三阶段上传 + 秒传 + 信息文件维护
 │   ├── server.js        # Web 服务：路由 + API + SSE
 │   └── proxy.js         # 代理配置：支持 HTTP/SOCKS5 代理
 ├── downloads/           # 安装包存储（自动创建）

@@ -1,13 +1,14 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { syncEmitter, getSyncState, abortSync, readVersionStore } = require('./downloader');
+const { syncEmitter, getSyncState, abortSync, readVersionStore, migrateExistingToWPS365, refreshCloudInfoFile } = require('./downloader');
 const { fetchLatestVersion } = require('./scraper');
 
 let cachedOfficialVersion = null;
 let triggerSync = null;
 let lastCheckTime = null;
 let lastSyncTime = null;
+let storedConfig = null;
 
 function refreshOfficialVersion() {
   fetchLatestVersion()
@@ -15,6 +16,16 @@ function refreshOfficialVersion() {
       cachedOfficialVersion = fullVersion;
       lastCheckTime = new Date().toISOString();
       console.log(`[VersionCheck] Official latest: ${fullVersion}`);
+
+      if (storedConfig) {
+        refreshCloudInfoFile(storedConfig, {
+          lastCheckTime,
+          lastSyncTime,
+          officialVersion: fullVersion,
+        }).catch(err => {
+          console.error(`[VersionCheck] 更新云端信息文件失败: ${err.message}`);
+        });
+      }
     })
     .catch((err) => {
       console.error(`[VersionCheck] Failed to fetch official version: ${err.message}`);
@@ -62,6 +73,7 @@ function localOnly(req, res, next) {
 }
 
 function createServer(config) {
+  storedConfig = config;
   const app = express();
   app.set('trust proxy', false);
   const downloadDir = path.resolve(config.downloadDir || './downloads');
@@ -120,6 +132,13 @@ function createServer(config) {
     }
     abortSync();
     res.json({ ok: true, msg: '终止信号已发送' });
+  });
+
+  app.post('/api/sync/migrate', localOnly, (req, res) => {
+    migrateExistingToWPS365(config).catch(err => {
+      console.error('[Migrate] Error:', err.message);
+    });
+    res.json({ ok: true, msg: '迁移任务已触发，请查看日志' });
   });
 
   app.get('/api/sync/stream', localOnly, (req, res) => {
