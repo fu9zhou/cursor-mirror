@@ -302,7 +302,7 @@ h1 span { color: var(--accent); }
 }
 
 .history-meta {
-  flex: 1; font-size: 13px; color: var(--text-dim);
+  flex: 1; font-size: 13px; color: var(--text-dim); text-align: right;
 }
 
 .history-toggle {

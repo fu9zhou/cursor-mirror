@@ -331,7 +331,7 @@
   function renderHistorySection(history) {
     if (!history || !history.length) return '';
     var items = history.map(function (h, idx) {
-      var date = h.updatedAt ? new Date(h.updatedAt).toLocaleDateString('zh-CN') : '';
+      var date = h.updatedAt ? new Date(h.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '';
       var fileCount = (h.files || []).filter(function(f) { return f.success !== false; }).length;
       return '<div class="history-card" id="historyCard' + idx + '">'
         + '<div class="history-header" onclick="toggleHistory(' + idx + ')">'

@@ -172,6 +172,13 @@ npm start
 1. 安装 [WPS365 CLI](https://github.com/wps365-open/cli)
 2. 配置 OAuth 凭证并登录授权（参考 [docs/WPS365-CLI-上传指南.md](docs/WPS365-CLI-上传指南.md)）
 3. 获取盘 ID：`wps365-cli drive list --allotee-type user`
+4. （Windows 服务部署）首次登录后需导出凭据到文件，详见下方说明
+
+**Windows 服务环境说明：**
+
+以 Windows 服务方式运行时，`wps365-cli` 的 OAuth 凭据存储在 Windows Credential Manager 中，而服务进程（Session 0）无法访问用户的凭据存储。程序会自动从 CLI 配置目录下的 `token_delegated.json` 文件读取 token，并在 token 过期时通过 OAuth API 自动刷新（需要 `config.json` 中包含 `client_secret`）。
+
+首次部署时需在交互式终端中执行一次登录，然后将凭据导出到文件系统。详细步骤参考 [docs/WPS365-CLI-上传指南.md](docs/WPS365-CLI-上传指南.md)。
 
 **配置示例：**
 
@@ -189,7 +196,7 @@ npm start
 启用后：
 - 拉取时每个文件**下载完立即上传**到 WPS365 对应版本文件夹
 - 页面默认展示云端下载链接，点击标识可切换到本地下载模式
-- WPS365 文件夹中自动维护一个状态信息文件（`【镜像vX.X.X_官方vX.X.X_N个包_日期_时间更新】.txt`）
+- WPS365 文件夹中自动维护一个状态信息文件（`【镜像vX.X.X_官方vX.X.X_MM-DD HHmm拉取_MM-DD HHmm更新】.txt`）
 - 上传失败的文件仍可通过本地服务器下载
 
 ### 支持的平台 key

@@ -627,7 +627,7 @@ async function refreshCloudInfoFile(config, { lastSyncTime, lastCheckTime, offic
       fileCount: totalFiles,
       historyVersions,
       siteUrl,
-      lastSyncTime: lastSyncTime || store.lastSyncTime || null,
+      lastSyncTime: lastSyncTime || store.lastSyncTime || currentEntry?.updatedAt || null,
       lastCheckTime: lastCheckTime || store.lastCheckTime || null,
     };
 

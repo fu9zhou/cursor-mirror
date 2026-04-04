@@ -10,12 +10,159 @@ let logFn = (msg) => console.log(msg);
 function setLogger(fn) { logFn = fn; }
 
 function getCliPath() {
+  const candidates = [];
   const userProfile = process.env.USERPROFILE || process.env.HOME || '';
-  const defaultPath = path.join(userProfile, '.wps365', 'bin', 'wps365-cli.exe');
-  if (fs.existsSync(defaultPath)) return defaultPath;
-  const altPath = path.join(userProfile, '.wps365', 'bin', 'wps365-cli');
-  if (fs.existsSync(altPath)) return altPath;
+  if (userProfile) {
+    candidates.push(path.join(userProfile, '.wps365', 'bin', 'wps365-cli.exe'));
+    candidates.push(path.join(userProfile, '.wps365', 'bin', 'wps365-cli'));
+  }
+
+  // When running as LocalSystem service, USERPROFILE points to systemprofile;
+  // scan real user directories so the CLI is still found.
+  if (process.platform === 'win32') {
+    const usersDir = path.join(process.env.SystemDrive || 'C:', 'Users');
+    try {
+      const dirs = fs.readdirSync(usersDir, { withFileTypes: true });
+      for (const d of dirs) {
+        if (!d.isDirectory()) continue;
+        if (/^(Public|Default|Default User|All Users)$/i.test(d.name)) continue;
+        const p = path.join(usersDir, d.name, '.wps365', 'bin', 'wps365-cli.exe');
+        if (!candidates.includes(p)) candidates.push(p);
+      }
+    } catch {}
+  }
+
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
   return 'wps365-cli';
+}
+
+function getCliConfigDir() {
+  const cli = getCliPath();
+  const match = cli.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i);
+  const profile = match ? match[1] : (process.env.USERPROFILE || process.env.HOME || '');
+  return path.join(profile, 'AppData', 'Roaming', 'wps365-cli');
+}
+
+// Read WPS365 CLI config.json (contains client_id, client_secret, api_base)
+function readCliConfig() {
+  try {
+    const cfgPath = path.join(getCliConfigDir(), 'config.json');
+    return JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+  } catch { return {}; }
+}
+
+// Token file lives alongside config.json — avoids Windows Credential Manager
+// which is inaccessible from Session 0 (services).
+function getTokenFilePath() {
+  return path.join(getCliConfigDir(), 'token_delegated.json');
+}
+
+function readTokenFile() {
+  try { return JSON.parse(fs.readFileSync(getTokenFilePath(), 'utf-8')); }
+  catch { return null; }
+}
+
+function writeTokenFile(data) {
+  try { fs.writeFileSync(getTokenFilePath(), JSON.stringify(data, null, 2), 'utf-8'); }
+  catch (e) { logFn(`[WPS365] Failed to save token: ${e.message}`); }
+}
+
+function httpsPost(url, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = https.request({
+      hostname: parsed.hostname,
+      port: 443,
+      path: parsed.pathname + parsed.search,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 15000,
+    }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+        catch { reject(new Error(`OAuth response parse error: ${data.substring(0, 200)}`)); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('OAuth request timeout')); });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+let cachedAccessToken = null;
+let cachedTokenExpiry = 0;
+
+async function ensureAccessToken() {
+  if (cachedAccessToken && Date.now() < cachedTokenExpiry - 60000) {
+    return cachedAccessToken;
+  }
+
+  const tokenData = readTokenFile();
+  if (tokenData?.access_token) {
+    const expiresAt = tokenData.access_token_expires_at
+      ? new Date(tokenData.access_token_expires_at).getTime()
+      : 0;
+    if (expiresAt > Date.now() + 60000) {
+      cachedAccessToken = tokenData.access_token;
+      cachedTokenExpiry = expiresAt;
+      return cachedAccessToken;
+    }
+  }
+
+  const cliCfg = readCliConfig();
+  if (tokenData?.refresh_token && cliCfg.client_id && cliCfg.client_secret) {
+    const tokenUrl = cliCfg.token_url || 'https://openapi.wps.cn/oauth2/token';
+    const body = [
+      `grant_type=refresh_token`,
+      `client_id=${encodeURIComponent(cliCfg.client_id)}`,
+      `client_secret=${encodeURIComponent(cliCfg.client_secret)}`,
+      `refresh_token=${encodeURIComponent(tokenData.refresh_token)}`,
+    ].join('&');
+
+    logFn('[WPS365] Refreshing access token via OAuth API...');
+    const resp = await httpsPost(tokenUrl, body);
+    if (resp.status === 200 && resp.body.access_token) {
+      const newToken = {
+        access_token: resp.body.access_token,
+        refresh_token: resp.body.refresh_token || tokenData.refresh_token,
+        token_type: resp.body.token_type || 'bearer',
+        granted_scopes: resp.body.scope
+          ? resp.body.scope.split(' ')
+          : (tokenData.granted_scopes || []),
+        access_token_expires_at: new Date(Date.now() + (resp.body.expires_in || 7200) * 1000).toISOString(),
+        refresh_token_expires_at: tokenData.refresh_token_expires_at || '',
+      };
+      writeTokenFile(newToken);
+      cachedAccessToken = newToken.access_token;
+      cachedTokenExpiry = new Date(newToken.access_token_expires_at).getTime();
+      logFn('[WPS365] Token refreshed successfully');
+      return cachedAccessToken;
+    }
+    throw new Error(`OAuth refresh failed (${resp.status}): ${JSON.stringify(resp.body)}`);
+  }
+
+  throw new Error('No valid WPS365 token and unable to refresh — run wps365-cli auth login in an interactive session');
+}
+
+function getCliEnv() {
+  const cli = getCliPath();
+  const env = { ...process.env };
+  const match = cli.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i);
+  if (match) {
+    const ownerProfile = match[1];
+    env.USERPROFILE = ownerProfile;
+    env.APPDATA = path.join(ownerProfile, 'AppData', 'Roaming');
+    env.LOCALAPPDATA = path.join(ownerProfile, 'AppData', 'Local');
+    env.HOME = ownerProfile;
+  }
+  if (cachedAccessToken) {
+    env.WPS365_ACCESS_TOKEN = cachedAccessToken;
+  }
+  return env;
 }
 
 function isCliAvailable() {
@@ -23,6 +170,7 @@ function isCliAvailable() {
     const cli = getCliPath();
     require('child_process').execFileSync(cli, ['--version'], {
       timeout: 10000, encoding: 'utf-8', stdio: 'pipe',
+      env: getCliEnv(),
     });
     return true;
   } catch {
@@ -30,11 +178,13 @@ function isCliAvailable() {
   }
 }
 
-function cliExec(args) {
+async function cliExec(args) {
+  await ensureAccessToken();
   return new Promise((resolve, reject) => {
     const cli = getCliPath();
     execFile(cli, args, {
       timeout: 120000, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024,
+      env: getCliEnv(),
     }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(`wps365-cli error: ${stderr || err.message}`));
@@ -49,19 +199,8 @@ function cliExec(args) {
   });
 }
 
-function getAuthToken() {
-  return new Promise((resolve, reject) => {
-    const cli = getCliPath();
-    execFile(cli, ['auth', 'token'], {
-      timeout: 15000, encoding: 'utf-8',
-    }, (err, stdout) => {
-      if (err) {
-        reject(new Error(`Failed to get WPS365 auth token: ${err.message}`));
-        return;
-      }
-      resolve(stdout.trim());
-    });
-  });
+async function getAuthToken() {
+  return ensureAccessToken();
 }
 
 function computeHashes(filePath) {
@@ -235,14 +374,23 @@ function formatTimeCN(dateOrStr) {
   return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 }
 
+function formatTimeCompact(dateOrStr) {
+  if (!dateOrStr) return '未知';
+  const d = typeof dateOrStr === 'string' ? new Date(dateOrStr) : dateOrStr;
+  if (isNaN(d.getTime())) return '未知';
+  const M = String(d.getMonth() + 1).padStart(2, '0');
+  const D = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${M}-${D} ${h}${m}`;
+}
+
 function buildInfoFileName(data) {
-  const now = new Date();
-  const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const timeStr = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
   const mirrorVer = data.mirrorVersion || '未同步';
   const officialVer = data.officialVersion || '未知';
-  const fileCount = data.fileCount || 0;
-  return `【镜像v${mirrorVer}_官方v${officialVer}_${fileCount}个包_${dateStr}_${timeStr}更新】.txt`;
+  const syncTime = formatTimeCompact(data.lastSyncTime);
+  const updateTime = formatTimeCompact(new Date());
+  return `【镜像v${mirrorVer}_官方v${officialVer}_${syncTime}拉取_${updateTime}更新】.txt`;
 }
 
 function buildInfoFileContent(data) {

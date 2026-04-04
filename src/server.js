@@ -103,7 +103,7 @@ function createServer(config) {
       officialVersion: cachedOfficialVersion,
       syncing: state.running,
       lastCheckTime,
-      lastSyncTime,
+      lastSyncTime: lastSyncTime || data.updatedAt || null,
       checkSchedule: '每个整点',
       syncSchedule: parseCronTimes(config.cron),
     });
