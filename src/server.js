@@ -115,6 +115,30 @@ function createServer(config) {
     res.json({ ...data, officialVersion: cachedOfficialVersion, syncing: state.running });
   });
 
+  app.post('/api/check-version', localOnly, async (req, res) => {
+    try {
+      const { fullVersion } = await fetchLatestVersion();
+      cachedOfficialVersion = fullVersion;
+      lastCheckTime = new Date().toISOString();
+      console.log(`[VersionCheck] Manual check: ${fullVersion}`);
+
+      if (storedConfig) {
+        refreshCloudInfoFile(storedConfig, {
+          lastCheckTime,
+          lastSyncTime,
+          officialVersion: fullVersion,
+        }).catch(err => {
+          console.error(`[VersionCheck] 更新云端信息文件失败: ${err.message}`);
+        });
+      }
+
+      res.json({ ok: true, version: fullVersion, lastCheckTime });
+    } catch (err) {
+      console.error(`[VersionCheck] Manual check failed: ${err.message}`);
+      res.json({ ok: false, msg: err.message });
+    }
+  });
+
   app.post('/api/sync/trigger', localOnly, (req, res) => {
     if (!triggerSync) {
       return res.json({ ok: false, msg: '同步函数未注册' });

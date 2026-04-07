@@ -96,6 +96,39 @@ function httpsPost(url, body) {
 let cachedAccessToken = null;
 let cachedTokenExpiry = 0;
 
+function tryCliToken() {
+  try {
+    const cli = getCliPath();
+    const token = require('child_process').execFileSync(cli, ['auth', 'token'], {
+      timeout: 15000, encoding: 'utf-8', stdio: 'pipe',
+      env: getCliEnv(),
+    }).trim();
+    if (token && token.startsWith('ey')) {
+      let statusInfo = {};
+      try {
+        const raw = require('child_process').execFileSync(cli, ['auth', 'status', '-o', 'json'], {
+          timeout: 10000, encoding: 'utf-8', stdio: 'pipe',
+          env: getCliEnv(),
+        });
+        statusInfo = JSON.parse(raw);
+      } catch {}
+
+      const d = statusInfo.delegated || {};
+      const newToken = {
+        access_token: token,
+        refresh_token: '',
+        token_type: 'bearer',
+        granted_scopes: d.granted_scopes || [],
+        access_token_expires_at: d.access_token_expires_at || new Date(Date.now() + 7200 * 1000).toISOString(),
+        refresh_token_expires_at: d.refresh_token_expires_at || '',
+      };
+      writeTokenFile(newToken);
+      return { token, expiresAt: new Date(newToken.access_token_expires_at).getTime() };
+    }
+  } catch {}
+  return null;
+}
+
 async function ensureAccessToken() {
   if (cachedAccessToken && Date.now() < cachedTokenExpiry - 60000) {
     return cachedAccessToken;
@@ -124,25 +157,37 @@ async function ensureAccessToken() {
     ].join('&');
 
     logFn('[WPS365] Refreshing access token via OAuth API...');
-    const resp = await httpsPost(tokenUrl, body);
-    if (resp.status === 200 && resp.body.access_token) {
-      const newToken = {
-        access_token: resp.body.access_token,
-        refresh_token: resp.body.refresh_token || tokenData.refresh_token,
-        token_type: resp.body.token_type || 'bearer',
-        granted_scopes: resp.body.scope
-          ? resp.body.scope.split(' ')
-          : (tokenData.granted_scopes || []),
-        access_token_expires_at: new Date(Date.now() + (resp.body.expires_in || 7200) * 1000).toISOString(),
-        refresh_token_expires_at: tokenData.refresh_token_expires_at || '',
-      };
-      writeTokenFile(newToken);
-      cachedAccessToken = newToken.access_token;
-      cachedTokenExpiry = new Date(newToken.access_token_expires_at).getTime();
-      logFn('[WPS365] Token refreshed successfully');
-      return cachedAccessToken;
+    try {
+      const resp = await httpsPost(tokenUrl, body);
+      if (resp.status === 200 && resp.body.access_token) {
+        const newToken = {
+          access_token: resp.body.access_token,
+          refresh_token: resp.body.refresh_token || tokenData.refresh_token,
+          token_type: resp.body.token_type || 'bearer',
+          granted_scopes: resp.body.scope
+            ? resp.body.scope.split(' ')
+            : (tokenData.granted_scopes || []),
+          access_token_expires_at: new Date(Date.now() + (resp.body.expires_in || 7200) * 1000).toISOString(),
+          refresh_token_expires_at: tokenData.refresh_token_expires_at || '',
+        };
+        writeTokenFile(newToken);
+        cachedAccessToken = newToken.access_token;
+        cachedTokenExpiry = new Date(newToken.access_token_expires_at).getTime();
+        logFn('[WPS365] Token refreshed successfully');
+        return cachedAccessToken;
+      }
+    } catch (refreshErr) {
+      logFn(`[WPS365] OAuth refresh failed: ${refreshErr.message}`);
     }
-    throw new Error(`OAuth refresh failed (${resp.status}): ${JSON.stringify(resp.body)}`);
+  }
+
+  logFn('[WPS365] Falling back to CLI token...');
+  const cliResult = tryCliToken();
+  if (cliResult) {
+    cachedAccessToken = cliResult.token;
+    cachedTokenExpiry = cliResult.expiresAt;
+    logFn('[WPS365] Got token from CLI successfully');
+    return cachedAccessToken;
   }
 
   throw new Error('No valid WPS365 token and unable to refresh — run wps365-cli auth login in an interactive session');

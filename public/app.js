@@ -71,11 +71,11 @@
     if (!btn) return;
     if (syncing) {
       btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span> 同步中...';
+      btn.textContent = '拉取中...';
       if (abortBtn) abortBtn.style.display = '';
     } else {
       btn.disabled = false;
-      btn.innerHTML = '↻ 立即拉取';
+      btn.textContent = '立即拉取';
       if (abortBtn) abortBtn.style.display = 'none';
     }
   }
@@ -111,6 +111,25 @@
       .catch(function () {});
   }
   window.abortSync = abortSync;
+
+  function triggerCheckVersion() {
+    var btn = document.getElementById('checkVersionBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '检查中...'; }
+    fetch('/api/check-version', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) {
+          document.getElementById('officialVer').textContent = 'v' + d.version;
+          document.getElementById('checkLastVal').textContent =
+            new Date(d.lastCheckTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        }
+        if (btn) { btn.disabled = false; btn.textContent = '立即检查'; }
+      })
+      .catch(function () {
+        if (btn) { btn.disabled = false; btn.textContent = '立即检查'; }
+      });
+  }
+  window.triggerCheckVersion = triggerCheckVersion;
 
   function triggerMigrate() {
     showLogPanel();
@@ -288,8 +307,6 @@
     }
 
     if (isLocal) {
-      html += '<button class="sync-btn" id="syncBtn" onclick="triggerSync()">↻ 立即拉取</button>';
-      html += '<button class="sync-btn abort-btn" id="abortBtn" onclick="abortSync()" style="display:none;background:#dc2626">■ 终止</button>';
       html += '<button class="sync-btn migrate-btn" id="migrateBtn" onclick="triggerMigrate()" title="上传已有版本到WPS365">☁ 迁移到云端</button>';
     }
 
@@ -422,6 +439,18 @@
     document.getElementById('checkLastVal').textContent = checkLast;
     document.getElementById('syncScheduleVal').textContent = data.syncSchedule || '-';
     document.getElementById('syncLastVal').textContent = syncLast;
+
+    var checkActionCell = document.getElementById('checkActionCell');
+    if (checkActionCell && isLocal) {
+      checkActionCell.innerHTML = '<button class="check-btn" id="checkVersionBtn" onclick="triggerCheckVersion()">立即检查</button>';
+    }
+
+    var syncActionCell = document.getElementById('syncActionCell');
+    if (syncActionCell && isLocal) {
+      syncActionCell.innerHTML =
+        '<button class="check-btn" id="syncBtn" onclick="triggerSync()">立即拉取</button>' +
+        '<button class="check-btn abort-btn-sm" id="abortBtn" onclick="abortSync()" style="display:none">终止</button>';
+    }
 
     if (data.syncing && isLocal) {
       setSyncing(true);
