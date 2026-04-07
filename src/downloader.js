@@ -7,7 +7,7 @@ const { PassThrough } = require('stream');
 const { EventEmitter } = require('events');
 const { fetchLatestVersion, getDownloadList } = require('./scraper');
 const { getProxyAgent } = require('./proxy');
-const { isCliAvailable, ensureFolder, uploadFile, updateInfoFile, setLogger } = require('./uploader');
+const { isCliAvailable, ensureFolder, uploadFile, updateInfoFile, shareFile, setLogger } = require('./uploader');
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000;
@@ -420,6 +420,13 @@ async function syncCursorPackages(config, options = {}) {
             downloadUrl = uploadResult.downloadUrl;
             wps365FileId = uploadResult.fileId;
             emitLog(`  上传完成: ${filename}`);
+
+            const share = config.wps365?.share;
+            if (share?.enabled && uploadResult.fileId) {
+              try {
+                await shareFile(wps365.driveId, uploadResult.fileId, share.roleId, share.scope);
+              } catch {}
+            }
           } catch (err) {
             emitLog(`  ⚠ 云端上传失败 (本地文件可用): ${filename} - ${err.message}`);
           }
@@ -571,6 +578,13 @@ async function migrateExistingToWPS365(config) {
           file.wps365FileId = result.fileId;
           changed = true;
           writeVersionStore(downloadDir, store);
+
+          const share = wps.share;
+          if (share?.enabled && result.fileId) {
+            try {
+              await shareFile(wps.driveId, result.fileId, share.roleId, share.scope);
+            } catch {}
+          }
         } catch (err) {
           emitLog(`  迁移失败: ${file.filename} - ${err.message}`);
         }
@@ -635,7 +649,15 @@ async function refreshCloudInfoFile(config, { lastSyncTime, lastCheckTime, offic
     if (lastCheckTime) store.lastCheckTime = lastCheckTime;
 
     const newInfoFileId = await updateInfoFile(wps.driveId, rootFolderId, infoData);
-    if (newInfoFileId) store.wps365InfoFileId = newInfoFileId;
+    if (newInfoFileId) {
+      store.wps365InfoFileId = newInfoFileId;
+      const share = wps.share;
+      if (share?.enabled) {
+        try {
+          await shareFile(wps.driveId, newInfoFileId, share.roleId, share.scope);
+        } catch {}
+      }
+    }
     writeVersionStore(downloadDir, store);
   } catch (err) {
     emitLog(`[WPS365] 更新信息文件失败: ${err.message}`);

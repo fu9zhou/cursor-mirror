@@ -138,6 +138,9 @@ npm start
 | `wps365.driveId`    | string             | `""`                          | WPS365 盘 ID（通过 `wps365-cli drive list` 获取）                                                     |
 | `wps365.parentFolderId` | string         | `"0"`                         | 父文件夹 ID，`"0"` 表示根目录                                                                         |
 | `wps365.rootFolderName` | string         | `"cursor-mirror"`             | 在 WPS365 中创建的根文件夹名称                                                                        |
+| `wps365.share.enabled`  | boolean        | `false`                       | 是否在上传后自动开启分享链接                                                                           |
+| `wps365.share.scope`    | string         | —                             | 分享范围：`anyone`（任何人）/ `company`（本企业成员）/ `users`（指定用户）                               |
+| `wps365.share.roleId`   | string         | —                             | 权限角色 ID，如 `"21020029"`（可查看），通过 `wps365-cli drive roles list` 查询                          |
 
 ### 平台筛选示例
 
@@ -172,7 +175,8 @@ npm start
 1. 安装 [WPS365 CLI](https://github.com/wps365-open/cli)
 2. 配置 OAuth 凭证并登录授权（参考 [docs/WPS365-CLI-上传指南.md](docs/WPS365-CLI-上传指南.md)）
 3. 获取盘 ID：`wps365-cli drive list --allotee-type user`
-4. （Windows 服务部署）首次登录后需导出凭据到文件，详见下方说明
+4. 如需自动分享，登录时需追加 scope：`wps365-cli auth login --scopes "...,kso.file_link.readwrite"`
+5. （Windows 服务部署）首次登录后需导出凭据到文件，详见下方说明
 
 **Windows 服务环境说明：**
 
@@ -188,13 +192,19 @@ npm start
     "enabled": true,
     "driveId": "你的盘ID",
     "parentFolderId": "0",
-    "rootFolderName": "cursor-mirror"
+    "rootFolderName": "cursor-mirror",
+    "share": {
+      "enabled": true,
+      "scope": "company",
+      "roleId": "21020029"
+    }
   }
 }
 ```
 
 启用后：
 - 拉取时每个文件**下载完立即上传**到 WPS365 对应版本文件夹
+- 上传完成后**自动开启分享链接**（需配置 `share`），内网用户可直接通过链接访问
 - 页面默认展示云端下载链接，点击标识可切换到本地下载模式
 - WPS365 文件夹中自动维护一个状态信息文件（`【镜像vX.X.X_官方vX.X.X_MM-DD HHmm拉取_MM-DD HHmm更新】.txt`）
 - 上传失败的文件仍可通过本地服务器下载

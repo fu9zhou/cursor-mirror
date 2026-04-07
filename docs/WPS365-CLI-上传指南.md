@@ -322,7 +322,95 @@ WPS365 CLI 使用 **OAuth 2.0 Bearer Token** 认证：
 
 通过文件哈希匹配，如果服务端已有相同文件，直接关联而不实际传输。
 
-## 9. 常见问题
+## 9. 文件分享配置
+
+上传完成后，默认只有文件所有者可以查看。如需让其他人通过链接查看文件，需要开启分享链接。
+
+### 9.1 查询可用角色
+
+```powershell
+wps365-cli drive roles list <drive_id>
+```
+
+返回示例：
+
+```json
+[
+  { "id": "21020028", "name": "仅查看" },
+  { "id": "21020029", "name": "可查看" },
+  { "id": "21020030", "name": "可编辑" },
+  { "id": "21020031", "name": "可评论" },
+  { "id": "21020032", "name": "可管理" }
+]
+```
+
+常用角色说明：
+
+| 角色 ID | 名称 | 权限 |
+| ------- | ---- | ---- |
+| `21020028` | 仅查看 | 仅预览，不可下载/复制/打印 |
+| `21020029` | 可查看 | 预览 + 下载 + 复制 + 打印 |
+| `21020030` | 可编辑 | 查看 + 编辑 + 上传 |
+| `21020032` | 可管理 | 全部权限 |
+
+### 9.2 分享范围（scope）
+
+| scope 值 | 对应 UI 显示 | 说明 |
+| --------- | ----------- | ---- |
+| `anyone` | 任何人 | 任何拿到链接的人均可访问 |
+| `company` | 本企业成员 | 仅组织内成员可通过链接访问 |
+| `users` | 仅指定用户 | 需通过权限 API 单独授权 |
+
+### 9.3 开启分享链接
+
+```powershell
+wps365-cli drive file-link open <drive_id> <file_id> --role-id <角色ID> --scope <scope>
+```
+
+**注意：** `open_link` API 首次创建链接时可能默认 scope 为 `anyone`，即使传了其他值。需要通过 update API 修改已有链接的 scope：
+
+```powershell
+$body = '{"scope":"company","role_id":"21020029"}'
+wps365-cli api post "/v7/links/<link_id>/update" --data $body
+```
+
+### 9.4 在 config.json 中配置自动分享
+
+在 `wps365` 配置块中添加 `share` 子项，上传完成后会自动开启分享链接：
+
+```json
+{
+  "wps365": {
+    "enabled": true,
+    "driveId": "你的盘ID",
+    "parentFolderId": "0",
+    "rootFolderName": "cursor-mirror",
+    "share": {
+      "enabled": true,
+      "scope": "company",
+      "roleId": "21020029"
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `share.enabled` | boolean | 是否在上传后自动开启分享 |
+| `share.scope` | string | 分享范围：`anyone` / `company` / `users` |
+| `share.roleId` | string | 权限角色 ID，通过 `drive roles list` 查询 |
+
+### 9.5 所需 OAuth Scope
+
+开启文件分享功能需要在登录时追加 `kso.file_link.readwrite` 权限：
+
+```powershell
+wps365-cli auth login --scopes "kso.user_base.read,kso.file.readwrite,kso.drive.readwrite,kso.file_link.readwrite"
+```
+
+---
+
+## 10. 常见问题
 
 ### Q: 上传时报 400000004 "请求参数不支持"
 

@@ -367,6 +367,31 @@ async function uploadFile(filePath, driveId, parentId) {
   }
 }
 
+async function shareFile(driveId, fileId, roleId, scope) {
+  try {
+    const openResult = await cliExec([
+      'drive', 'file-link', 'open', driveId, fileId,
+      '--role-id', roleId,
+      '--scope', scope,
+    ]);
+    if (openResult?.code && openResult.code !== 0) {
+      throw new Error(openResult.msg || JSON.stringify(openResult));
+    }
+
+    const linkId = openResult?.data?.id;
+    if (linkId && openResult?.data?.scope !== scope) {
+      const updateBody = JSON.stringify({ scope, role_id: roleId });
+      await cliExec(['api', 'post', `/v7/links/${linkId}/update`, '--data', updateBody]);
+    }
+
+    logFn(`  [WPS365] 分享已开启: ${fileId} (${scope})`);
+    return openResult;
+  } catch (err) {
+    logFn(`  [WPS365] 开启分享失败: ${fileId} - ${err.message}`);
+    throw err;
+  }
+}
+
 function formatTimeCN(dateOrStr) {
   if (!dateOrStr) return '-';
   const d = typeof dateOrStr === 'string' ? new Date(dateOrStr) : dateOrStr;
@@ -482,5 +507,6 @@ module.exports = {
   ensureFolder,
   uploadFile,
   updateInfoFile,
+  shareFile,
   getCliPath,
 };
