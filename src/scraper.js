@@ -78,6 +78,10 @@ function getFirstRedirectLocation(url) {
   });
 }
 
+const VERSION_PROBE_MAX_RETRIES = 3;
+const VERSION_PROBE_RETRY_DELAY_MS = 3000;
+const FULL_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
 async function fetchLatestVersion() {
   const html = await httpsGet(DOWNLOAD_PAGE_URL);
   const $ = cheerio.load(html);
@@ -104,17 +108,33 @@ async function fetchLatestVersion() {
     throw new Error('Could not parse latest version from Cursor download page');
   }
 
-  let fullVersion = apiVersion;
+  let fullVersion = null;
 
-  try {
-    const probeUrl = buildDownloadUrl('win32-x64', apiVersion);
-    const redirectUrl = await getFirstRedirectLocation(probeUrl);
-    const versionMatch = redirectUrl.match(/[-_](\d+\.\d+\.\d+)/);
-    if (versionMatch) {
-      fullVersion = versionMatch[1];
+  for (let attempt = 1; attempt <= VERSION_PROBE_MAX_RETRIES; attempt++) {
+    try {
+      const probeUrl = buildDownloadUrl('win32-x64', apiVersion);
+      const redirectUrl = await getFirstRedirectLocation(probeUrl);
+      const versionMatch = redirectUrl.match(/[-_](\d+\.\d+\.\d+)/);
+      if (versionMatch && FULL_VERSION_PATTERN.test(versionMatch[1])) {
+        fullVersion = versionMatch[1];
+        break;
+      }
+      console.warn(`[VersionProbe] Attempt ${attempt}/${VERSION_PROBE_MAX_RETRIES}: resolved "${versionMatch ? versionMatch[1] : 'null'}" which is not a valid x.y.z version`);
+    } catch (err) {
+      console.warn(`[VersionProbe] Attempt ${attempt}/${VERSION_PROBE_MAX_RETRIES}: probe failed: ${err.message}`);
     }
-  } catch (err) {
-    console.error(`[VersionProbe] Failed to resolve full version: ${err.message}, using ${apiVersion}`);
+    if (attempt < VERSION_PROBE_MAX_RETRIES) {
+      await new Promise((r) => setTimeout(r, VERSION_PROBE_RETRY_DELAY_MS * attempt));
+    }
+  }
+
+  if (!fullVersion) {
+    if (FULL_VERSION_PATTERN.test(apiVersion)) {
+      console.warn(`[VersionProbe] All ${VERSION_PROBE_MAX_RETRIES} probe attempts failed, apiVersion "${apiVersion}" is valid x.y.z, using as fallback`);
+      fullVersion = apiVersion;
+    } else {
+      throw new Error(`[VersionProbe] Failed to resolve a valid x.y.z version after ${VERSION_PROBE_MAX_RETRIES} attempts (apiVersion="${apiVersion}" is not x.y.z)`);
+    }
   }
 
   return { apiVersion, fullVersion };
