@@ -65,6 +65,9 @@ function readVersionStore(downloadDir) {
 }
 
 function writeVersionStore(downloadDir, store) {
+  if (!fs.existsSync(downloadDir)) {
+    fs.mkdirSync(downloadDir, { recursive: true });
+  }
   const versionFile = path.join(downloadDir, 'version.json');
   const tmpFile = versionFile + '.tmp';
   fs.writeFileSync(tmpFile, JSON.stringify(store, null, 2), 'utf-8');
