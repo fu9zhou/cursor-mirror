@@ -4,3 +4,9 @@ logs/
 nssm.exe
 config.json
 wps365-config/
+.git/
+.gitignore
+.VSCodeCounter/
+.playwright-mcp/
+*.bat
+*.md

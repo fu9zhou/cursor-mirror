@@ -1,0 +1,18 @@
+services:
+  cursor-mirror:
+    build: .
+    container_name: cursor-mirror
+    restart: unless-stopped
+    ports:
+      - "6700:6700"
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./downloads:/app/downloads
+      - ./wps365-config:/app/wps365-config
+    environment:
+      - TZ=Asia/Shanghai
+      - WPS365_KEYRING_BACKEND=file
+      - WPS365_CONFIG_DIR=/app/wps365-config
+      # - HTTPS_PROXY=http://host.docker.internal:7890
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"

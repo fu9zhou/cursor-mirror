@@ -15,6 +15,12 @@
     "enabled": false,
     "driveId": "",
     "parentFolderId": "0",
-    "rootFolderName": "cursor-mirror"
+    "rootFolderName": "cursor-mirror",
+    "useParentAsRoot": false,
+    "share": {
+      "enabled": false,
+      "scope": "company",
+      "roleId": "21020029"
+    }
   }
 }

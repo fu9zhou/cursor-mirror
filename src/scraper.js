@@ -1,9 +1,6 @@
-const cheerio = require('cheerio');
 const https = require('https');
 const http = require('http');
 const { getProxyAgent } = require('./proxy');
-
-const DOWNLOAD_PAGE_URL = 'https://cursor.com/cn/download';
 
 const ALL_PLATFORMS = [
   { key: 'darwin-arm64', label: 'Mac (ARM64)', category: 'macOS' },
@@ -25,35 +22,10 @@ function buildDownloadUrl(platformKey, version) {
   return `https://api2.cursor.sh/updates/download/golden/${platformKey}/cursor/${version}`;
 }
 
-function httpsGet(url, maxRedirects = 10) {
-  return new Promise((resolve, reject) => {
-    if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
-    const client = url.startsWith('https') ? https : http;
-    const agent = getProxyAgent();
-    const opts = {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      timeout: 15000,
-    };
-    if (agent) opts.agent = agent;
-
-    const req = client.get(url, opts, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        return resolve(httpsGet(res.headers.location, maxRedirects - 1));
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`HTTP ${res.statusCode}`));
-      }
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-      res.on('error', reject);
-    });
-    req.on('timeout', () => { req.destroy(new Error('Connection timeout')); });
-    req.on('error', reject);
-  });
-}
+const VERSION_PROBE_PLATFORMS = ['win32-x64', 'linux-x64'];
+const VERSION_PROBE_MAX_RETRIES = 3;
+const VERSION_PROBE_RETRY_DELAY_MS = 3000;
+const FULL_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 
 function getFirstRedirectLocation(url) {
   return new Promise((resolve, reject) => {
@@ -78,66 +50,27 @@ function getFirstRedirectLocation(url) {
   });
 }
 
-const VERSION_PROBE_MAX_RETRIES = 3;
-const VERSION_PROBE_RETRY_DELAY_MS = 3000;
-const FULL_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
-
 async function fetchLatestVersion() {
-  const html = await httpsGet(DOWNLOAD_PAGE_URL);
-  const $ = cheerio.load(html);
-
-  let apiVersion = null;
-
-  $('a[href*="api2.cursor.sh/updates/download/golden"]').each((_, el) => {
-    const href = $(el).attr('href');
-    const match = href && href.match(/\/cursor\/([\d.]+)$/);
-    if (match && !apiVersion) {
-      apiVersion = match[1];
-    }
-  });
-
-  if (!apiVersion) {
-    const bodyText = $('body').text();
-    const match = bodyText.match(/([\d]+\.[\d]+(?:\.[\d]+)?)[\s]*Latest/i);
-    if (match) {
-      apiVersion = match[1];
-    }
-  }
-
-  if (!apiVersion) {
-    throw new Error('Could not parse latest version from Cursor download page');
-  }
-
-  let fullVersion = null;
-
   for (let attempt = 1; attempt <= VERSION_PROBE_MAX_RETRIES; attempt++) {
-    try {
-      const probeUrl = buildDownloadUrl('win32-x64', apiVersion);
-      const redirectUrl = await getFirstRedirectLocation(probeUrl);
-      const versionMatch = redirectUrl.match(/[-_](\d+\.\d+\.\d+)/);
-      if (versionMatch && FULL_VERSION_PATTERN.test(versionMatch[1])) {
-        fullVersion = versionMatch[1];
-        break;
+    for (const platform of VERSION_PROBE_PLATFORMS) {
+      try {
+        const probeUrl = buildDownloadUrl(platform, 'latest');
+        const redirectUrl = await getFirstRedirectLocation(probeUrl);
+        const versionMatch = redirectUrl.match(/[-_](\d+\.\d+\.\d+)/);
+        if (versionMatch && FULL_VERSION_PATTERN.test(versionMatch[1])) {
+          const fullVersion = versionMatch[1];
+          return { apiVersion: fullVersion, fullVersion };
+        }
+      } catch (err) {
+        console.warn(`[VersionProbe] Attempt ${attempt}/${VERSION_PROBE_MAX_RETRIES} (${platform}): ${err.message}`);
       }
-      console.warn(`[VersionProbe] Attempt ${attempt}/${VERSION_PROBE_MAX_RETRIES}: resolved "${versionMatch ? versionMatch[1] : 'null'}" which is not a valid x.y.z version`);
-    } catch (err) {
-      console.warn(`[VersionProbe] Attempt ${attempt}/${VERSION_PROBE_MAX_RETRIES}: probe failed: ${err.message}`);
     }
     if (attempt < VERSION_PROBE_MAX_RETRIES) {
       await new Promise((r) => setTimeout(r, VERSION_PROBE_RETRY_DELAY_MS * attempt));
     }
   }
 
-  if (!fullVersion) {
-    if (FULL_VERSION_PATTERN.test(apiVersion)) {
-      console.warn(`[VersionProbe] All ${VERSION_PROBE_MAX_RETRIES} probe attempts failed, apiVersion "${apiVersion}" is valid x.y.z, using as fallback`);
-      fullVersion = apiVersion;
-    } else {
-      throw new Error(`[VersionProbe] Failed to resolve a valid x.y.z version after ${VERSION_PROBE_MAX_RETRIES} attempts (apiVersion="${apiVersion}" is not x.y.z)`);
-    }
-  }
-
-  return { apiVersion, fullVersion };
+  throw new Error(`Failed to resolve latest version after ${VERSION_PROBE_MAX_RETRIES} attempts via API redirect probe`);
 }
 
 function filterPlatforms(config) {

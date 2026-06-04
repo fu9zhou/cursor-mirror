@@ -39,10 +39,17 @@ function getCliPath() {
 }
 
 function getCliConfigDir() {
-  const cli = getCliPath();
-  const match = cli.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i);
-  const profile = match ? match[1] : (process.env.USERPROFILE || process.env.HOME || '');
-  return path.join(profile, 'AppData', 'Roaming', 'wps365-cli');
+  if (process.env.WPS365_CONFIG_DIR) {
+    return process.env.WPS365_CONFIG_DIR;
+  }
+  if (process.platform === 'win32') {
+    const cli = getCliPath();
+    const match = cli.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i);
+    const profile = match ? match[1] : (process.env.USERPROFILE || process.env.HOME || '');
+    return path.join(process.env.APPDATA || path.join(profile, 'AppData', 'Roaming'), 'wps365-cli');
+  }
+  const xdg = process.env.XDG_CONFIG_HOME || path.join(process.env.HOME || '/root', '.config');
+  return path.join(xdg, 'wps365-cli');
 }
 
 // Read WPS365 CLI config.json (contains client_id, client_secret, api_base)
@@ -196,14 +203,17 @@ async function ensureAccessToken() {
 function getCliEnv() {
   const cli = getCliPath();
   const env = { ...process.env };
-  const match = cli.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i);
-  if (match) {
-    const ownerProfile = match[1];
-    env.USERPROFILE = ownerProfile;
-    env.APPDATA = path.join(ownerProfile, 'AppData', 'Roaming');
-    env.LOCALAPPDATA = path.join(ownerProfile, 'AppData', 'Local');
-    env.HOME = ownerProfile;
+  if (process.platform === 'win32') {
+    const match = cli.match(/^([A-Za-z]:\\Users\\[^\\]+)\\/i);
+    if (match) {
+      const ownerProfile = match[1];
+      env.USERPROFILE = ownerProfile;
+      env.APPDATA = path.join(ownerProfile, 'AppData', 'Roaming');
+      env.LOCALAPPDATA = path.join(ownerProfile, 'AppData', 'Local');
+      env.HOME = ownerProfile;
+    }
   }
+  env.WPS365_CONFIG_DIR = getCliConfigDir();
   if (cachedAccessToken) {
     env.WPS365_ACCESS_TOKEN = cachedAccessToken;
   }

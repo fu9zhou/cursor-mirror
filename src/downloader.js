@@ -240,6 +240,15 @@ async function downloadFile(url, destPath, retries = MAX_RETRIES) {
   return { size: 0, expectedSize: 0, success: false, error: 'All retries exhausted' };
 }
 
+async function resolveRootFolder(wps) {
+  if (wps.useParentAsRoot && wps.parentFolderId && wps.parentFolderId !== '0') {
+    return wps.parentFolderId;
+  }
+  const rootName = wps.rootFolderName || 'cursor-mirror';
+  const parentId = wps.parentFolderId || '0';
+  return await ensureFolder(wps.driveId, parentId, rootName);
+}
+
 async function initWPS365(config, fullVersion) {
   const wps = config.wps365;
   if (!wps || !wps.enabled || !wps.driveId) return null;
@@ -251,9 +260,9 @@ async function initWPS365(config, fullVersion) {
 
   try {
     const rootName = wps.rootFolderName || 'cursor-mirror';
-    const parentId = wps.parentFolderId || '0';
-    emitLog(`[WPS365] 初始化云端存储: ${rootName}/${fullVersion}`);
-    const rootFolderId = await ensureFolder(wps.driveId, parentId, rootName);
+    const label = wps.useParentAsRoot ? `共享文件夹/${fullVersion}` : `${rootName}/${fullVersion}`;
+    emitLog(`[WPS365] 初始化云端存储: ${label}`);
+    const rootFolderId = await resolveRootFolder(wps);
     const versionFolderId = await ensureFolder(wps.driveId, rootFolderId, fullVersion);
     return { driveId: wps.driveId, versionFolderId, rootFolderId };
   } catch (err) {
@@ -546,9 +555,7 @@ async function migrateExistingToWPS365(config) {
   syncState.aborted = false;
 
   try {
-    const rootName = wps.rootFolderName || 'cursor-mirror';
-    const parentId = wps.parentFolderId || '0';
-    const rootFolderId = await ensureFolder(wps.driveId, parentId, rootName);
+    const rootFolderId = await resolveRootFolder(wps);
 
     let changed = false;
 
@@ -624,7 +631,7 @@ async function refreshCloudInfoFile(config, { lastSyncTime, lastCheckTime, offic
 
     const downloadDir = path.resolve(config.downloadDir || './downloads');
     const store = readVersionStore(downloadDir);
-    const rootFolderId = await ensureFolder(wps.driveId, wps.parentFolderId || '0', wps.rootFolderName || 'cursor-mirror');
+    const rootFolderId = await resolveRootFolder(wps);
 
     const currentEntry = store.history.find(h => h.version === store.current);
     const historyVersions = store.history

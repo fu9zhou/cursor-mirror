@@ -8,7 +8,6 @@
   },
   "license": "ISC",
   "dependencies": {
-    "cheerio": "^1.2.0",
     "express": "^5.2.1",
     "https-proxy-agent": "^5.0.1",
     "node-cron": "^4.2.1"
